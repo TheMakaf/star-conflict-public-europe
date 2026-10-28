@@ -1,4 +1,4 @@
-SC Launcher 0.7.1
+SC Launcher 0.7.2
 =================
 
 Purpose
@@ -14,7 +14,7 @@ the mod files and installs what is missing or changed. The window has:
   if the game is missing, the button becomes INSTALL GAME (steam://install/212070);
 - Check for updates: the same check with a result message;
 - Website, Discord, news (from the server's news.json);
-- RU / UK flags: launcher and game language;
+- RU / UK flags: launcher language (the game language is not changed, set it in the game's own settings);
 - Settings: install / remove the modification and the Steam launch line.
 
 Steam mode (recommended)

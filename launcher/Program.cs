@@ -19,8 +19,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Лаунчер Star Conflict Europe - Unofficial Server")]
 [assembly: AssemblyCompany("Star Conflict Community")]
 [assembly: AssemblyProduct("SC Launcher")]
-[assembly: AssemblyVersion("0.7.1.0")]
-[assembly: AssemblyFileVersion("0.7.1.0")]
+[assembly: AssemblyVersion("0.7.2.0")]
+[assembly: AssemblyFileVersion("0.7.2.0")]
 
 namespace SCCommunitySetup
 {
@@ -239,7 +239,6 @@ namespace SCCommunitySetup
             if (!selected)
                 button.Click += delegate {
                     LauncherSettings.Set("Language", value);
-                    GameLanguage.Apply(value);
                     BeginInvoke(new Action(delegate { Application.Restart(); }));
                 };
             return button;
@@ -336,7 +335,6 @@ namespace SCCommunitySetup
             {
                 string root = Path.GetFullPath(gamePath.Text.Trim());
                 string updateResult = await Task.Run(() => {
-                    GameLanguage.ApplyConfigured();
                     LauncherMode.EnsurePreset(root);
                     return ModUpdater.ApplyConfigured(root);
                 });
@@ -396,7 +394,15 @@ namespace SCCommunitySetup
     internal sealed class SetupForm : Form
     {
         internal const string ServerName = "Star Conflict Europe - Unofficial Server";
-        internal const string ServerAddress = "57.131.200.242:3801";
+        // launcher-config.ini "ServerAddress=127.0.0.1:3801" points a test copy at a local server.
+        internal static string ServerAddress
+        {
+            get
+            {
+                string value = LauncherSettings.Get("ServerAddress");
+                return String.IsNullOrWhiteSpace(value) ? "57.131.200.242:3801" : value;
+            }
+        }
         internal const string Marker = "-- SC Community Server Preset v0.6.5";
 
         private readonly TextBox gamePath = new TextBox();
@@ -795,9 +801,9 @@ namespace SCCommunitySetup
             };
             foreach (string name in names)
             {
+                // Any address: an entry written by a test copy (ServerAddress override) is replaced too.
                 string escapedName = Regex.Escape(name);
-                string escapedAddress = Regex.Escape(ServerAddress);
-                text = Regex.Replace(text, "(?m)^[ \\t]*\\{[ \\t]*name[ \\t]*=[ \\t]*\\\"" + escapedName + "\\\"[ \\t]*,[ \\t]*address[ \\t]*=[ \\t]*\\\"" + escapedAddress + "\\\"[ \\t]*\\},[ \\t]*\\r?\\n", "");
+                text = Regex.Replace(text, "(?m)^[ \\t]*\\{[ \\t]*name[ \\t]*=[ \\t]*\\\"" + escapedName + "\\\"[ \\t]*,[ \\t]*address[ \\t]*=[ \\t]*\\\"[^\\\"\\r\\n]*\\\"[ \\t]*\\},[ \\t]*\\r?\\n", "");
             }
             return text;
         }
@@ -887,7 +893,6 @@ namespace SCCommunitySetup
                 string gameRoot = FindGameRoot(executable) ?? SetupForm.FindGamePath();
                 if (LauncherSettings.GetBoolean("SuppressLocalServer", true))
                     localServerGuard = LocalServerGuard.Disable(gameRoot);
-                GameLanguage.ApplyConfigured();
                 EnsurePreset(gameRoot);
                 ModUpdater.ApplyConfigured(gameRoot);
 
@@ -1157,23 +1162,6 @@ namespace SCCommunitySetup
             return "RUSSIAN";
         }
 
-        internal static void ApplyConfigured()
-        {
-            Apply(GetConfigured());
-        }
-
-        internal static void Apply(string value)
-        {
-            string normalized = String.Equals(value, "ENGLISH", StringComparison.OrdinalIgnoreCase) ? "ENGLISH" : "RUSSIAN";
-            foreach (string path in ConfigPaths())
-            {
-                if (!File.Exists(path)) continue;
-                string text = File.ReadAllText(path, Encoding.UTF8);
-                string updated = Regex.Replace(text, "<cl_language\\s+val=\\\"[^\\\"]*\\\"\\s*/>", "<cl_language val=\"" + normalized + "\" />", RegexOptions.IgnoreCase);
-                if (updated != text) File.WriteAllText(path, updated, new UTF8Encoding(false));
-            }
-        }
-
         private static string[] ConfigPaths()
         {
             return new[] {
@@ -1398,7 +1386,7 @@ namespace SCCommunitySetup
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
             request.Timeout = 5000;
             request.ReadWriteTimeout = 5000;
-            request.UserAgent = "SC-Launcher/0.7.1";
+            request.UserAgent = "SC-Launcher/0.7.2";
             using (WebResponse response = request.GetResponse())
             using (Stream input = response.GetResponseStream())
             using (MemoryStream output = new MemoryStream())
@@ -1570,7 +1558,7 @@ namespace SCCommunitySetup
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             WebClient client = new WebClient();
-            client.Headers[HttpRequestHeader.UserAgent] = "SC-Launcher/0.7.1";
+            client.Headers[HttpRequestHeader.UserAgent] = "SC-Launcher/0.7.2";
             return client;
         }
 
