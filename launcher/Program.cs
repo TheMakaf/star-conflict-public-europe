@@ -19,8 +19,8 @@ using Microsoft.Win32;
 [assembly: AssemblyDescription("Лаунчер Star Conflict Europe - Unofficial Server")]
 [assembly: AssemblyCompany("Star Conflict Community")]
 [assembly: AssemblyProduct("SC Launcher")]
-[assembly: AssemblyVersion("0.7.2.0")]
-[assembly: AssemblyFileVersion("0.7.2.0")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 
 namespace SCCommunitySetup
 {
@@ -29,6 +29,7 @@ namespace SCCommunitySetup
         [STAThread]
         private static int Main(string[] args)
         {
+            LauncherSelfUpdate.CleanupOld();
             if (args.Length > 0)
                 return LauncherMode.Run(args);
 
@@ -80,7 +81,7 @@ namespace SCCommunitySetup
             };
             top.Controls.Add(title);
             Label subtitle = new Label {
-                Text = "COMMUNITY LAUNCHER  •  UNOFFICIAL SERVER", AutoSize = true,
+                Text = "COMMUNITY LAUNCHER  •  UNOFFICIAL SERVER  •  v" + LauncherSelfUpdate.Current.ToString(3), AutoSize = true,
                 Font = new Font("Segoe UI Semibold", 10F), ForeColor = Color.FromArgb(72, 202, 235),
                 Location = new Point(461, 82)
             };
@@ -139,7 +140,7 @@ namespace SCCommunitySetup
             };
 
             Panel side = new Panel {
-                Location = new Point(720, 210), Size = new Size(278, 305),
+                Location = new Point(720, 205), Size = new Size(278, 342),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Right,
                 BackColor = Color.FromArgb(10, 26, 40)
             };
@@ -148,16 +149,26 @@ namespace SCCommunitySetup
             side.Controls.Add(new Label { Text = SetupForm.ServerName, Size = new Size(242, 58), Font = new Font("Segoe UI Semibold", 11F), ForeColor = Color.White, Location = new Point(18, 45) });
             status.Text = UiText.T("Проверка…", "Checking…");
             status.AutoSize = false;
-            status.Size = new Size(240, 58);
+            status.Size = new Size(240, 46);
             status.Location = new Point(18, 116);
             status.ForeColor = Color.FromArgb(150, 170, 190);
             side.Controls.Add(status);
+            CheckBox longWait = MakeOptionBox(UiText.T("Дольше ждать игроков в PvP\n(до 5 мин)", "Wait longer for PvP players\n(up to 5 min)"),
+                PvpFlags.LongWaitEnabled, 158, PvpFlags.LongWaitKey, UiText.T(
+                "PvP-бой только из игроков с этой галкой добирается ботами через ~5 минут вместо 1.\nЕсли в бою есть игрок без галки, бой начинается как обычно.\nДействует со следующего запуска игры.",
+                "A PvP game of players with this box only is filled with bots after ~5 minutes instead of 1.\nIf a player without it is in the game, it starts as usual.\nTakes effect from the next game start."));
+            side.Controls.Add(longWait);
+            CheckBox soloVsSquads = MakeOptionBox(UiText.T("Готов играть в соло\nпротив звеньев", "Ready to play solo\nagainst squads"),
+                PvpFlags.SoloVsSquadsEnabled, 198, PvpFlags.SoloVsSquadsKey, UiText.T(
+                "Если в PvP ждёт звено, а живых соперников для тебя нет, ты попадёшь в бой против этого звена (вместо ботов в его команде соперников), а не в отдельный бой с ботами.\nНапример, звено из 3 против тебя и 3 ботов.\nДействует со следующего запуска игры.",
+                "If a squad is waiting in PvP and there are no live opponents for you, you join a battle against that squad (in place of its bot opponents) instead of a separate battle with bots.\nFor example, a squad of 3 against you and 3 bots.\nTakes effect from the next game start."));
+            side.Controls.Add(soloVsSquads);
             Button check = MakeButton(UiText.T("ПРОВЕРИТЬ ОБНОВЛЕНИЯ", "CHECK FOR UPDATES"), Color.FromArgb(32, 64, 87));
-            check.Location = new Point(18, 205); check.Size = new Size(242, 38);
+            check.Location = new Point(18, 242); check.Size = new Size(242, 38);
             check.Click += async delegate { await CheckAndApplyAsync(true); };
             side.Controls.Add(check);
             play = MakeButton(UiText.T("ИГРАТЬ", "PLAY"), Color.FromArgb(184, 129, 39));
-            play.Location = new Point(18, 251); play.Size = new Size(242, 42);
+            play.Location = new Point(18, 288); play.Size = new Size(242, 42);
             play.Click += async delegate { await PlayAsync(); };
             side.Controls.Add(play);
 
@@ -242,6 +253,26 @@ namespace SCCommunitySetup
                     BeginInvoke(new Action(delegate { Application.Restart(); }));
                 };
             return button;
+        }
+
+        // SC-84 / SC-177 PvP options: saved in the launcher settings and written into the client's gameplaywnd.lua at once
+        private CheckBox MakeOptionBox(string text, bool value, int top, string settingKey, string tip)
+        {
+            CheckBox box = new CheckBox {
+                Text = text, Checked = value, AutoSize = false, Size = new Size(250, 38), Location = new Point(18, top), Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(190, 207, 222), Cursor = Cursors.Hand
+            };
+            new ToolTip { AutoPopDelay = 20000 }.SetToolTip(box, tip);
+            box.CheckedChanged += delegate {
+                LauncherSettings.Set(settingKey, box.Checked ? "true" : "false");
+                try
+                {
+                    if (IsGameAvailable() && !PvpFlags.Ensure(Path.GetFullPath(gamePath.Text.Trim())))
+                        status.Text = UiText.T("Файл игры не распознан, галка не применена", "Game file not recognised, the option is not applied");
+                }
+                catch (Exception ex) { status.Text = ex.Message; }
+            };
+            return box;
         }
 
         private static Button MakeButton(string text, Color color)
@@ -330,13 +361,20 @@ namespace SCCommunitySetup
                 return;
             }
             play.Enabled = false;
+            status.Text = UiText.T("Проверяем версию лаунчера…", "Checking launcher version…");
+            LauncherRelease release = await Task.Run(() => {
+                try { return LauncherSelfUpdate.FindNewer(); }
+                catch (Exception ex) { WriteLauncherCheckLog(ex); return null; }
+            });
+            if (release != null && await OfferSelfUpdateAsync(release)) return;
             status.Text = UiText.T("Проверяем пресет и моды…", "Checking preset and mods…");
             try
             {
                 string root = Path.GetFullPath(gamePath.Text.Trim());
                 string updateResult = await Task.Run(() => {
-                    LauncherMode.EnsurePreset(root);
-                    return ModUpdater.ApplyConfigured(root);
+                    // Mods first: loginwnd.lua is one of them, the preset then sets the configured address in it.
+                    try { return ModUpdater.ApplyConfigured(root); }
+                    finally { LauncherMode.EnsurePreset(root); PvpFlags.Ensure(root); }
                 });
                 status.ForeColor = Color.FromArgb(89, 205, 124);
                 status.Text = String.IsNullOrEmpty(updateResult) ? UiText.T("ГОТОВО К ЗАПУСКУ", "READY TO PLAY") : updateResult;
@@ -349,6 +387,46 @@ namespace SCCommunitySetup
                 if (showResult) MessageBox.Show(this, ex.Message, UiText.T("Ошибка проверки", "Check failed"), MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally { play.Enabled = true; }
+        }
+
+        private static void WriteLauncherCheckLog(Exception ex)
+        {
+            try { LauncherMode.WriteLauncherLog("Launcher update check failed: " + ex.Message); } catch { }
+        }
+
+        // Returns true when the launcher is being replaced and restarted (the caller stops).
+        private async Task<bool> OfferSelfUpdateAsync(LauncherRelease release)
+        {
+            string version = release.Version.ToString(3);
+            if (!LauncherSelfUpdate.CanReplaceSelf())
+            {
+                DialogResult open = MessageBox.Show(this,
+                    UiText.T("Доступна новая версия лаунчера " + version + ". Папка лаунчера защищена от записи, поэтому обновить его автоматически нельзя. Открыть сайт, чтобы скачать вручную?",
+                             "Launcher version " + version + " is available. The launcher folder is write-protected, so it cannot update itself. Open the website to download it?"),
+                    UiText.T("Обновление лаунчера", "Launcher update"), MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                if (open == DialogResult.Yes) Process.Start(new ProcessStartInfo(WebsiteUrl) { UseShellExecute = true });
+                return false;
+            }
+            DialogResult answer = MessageBox.Show(this,
+                UiText.T("Доступна новая версия лаунчера " + version + " (у вас " + LauncherSelfUpdate.Current.ToString(3) + "). Обновить сейчас? Лаунчер перезапустится.",
+                         "Launcher version " + version + " is available (you have " + LauncherSelfUpdate.Current.ToString(3) + "). Update now? The launcher will restart."),
+                UiText.T("Обновление лаунчера", "Launcher update"), MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) return false;
+            status.Text = UiText.T("Обновляем лаунчер…", "Updating launcher…");
+            try
+            {
+                await Task.Run(() => LauncherSelfUpdate.Install(release));
+                Process.Start(new ProcessStartInfo(LauncherSelfUpdate.ExePath) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(LauncherSelfUpdate.ExePath) });
+                Application.Exit();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WriteLauncherCheckLog(ex);
+                MessageBox.Show(this, UiText.T("Не удалось обновить лаунчер: ", "Could not update the launcher: ") + ex.Message,
+                    UiText.T("Обновление лаунчера", "Launcher update"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
         }
 
         private async Task PlayAsync()
@@ -782,6 +860,7 @@ namespace SCCommunitySetup
         {
             // Mod files first: loginwnd.lua may be one of them, and the preset cleanup below then runs on the stock file.
             int restoredFiles = ModUpdater.RestoreOriginals(root);
+            PvpFlags.Ensure(root, false, false);
             WriteLog(UiText.T("Возвращено исходных файлов игры: ", "Game files restored: ") + restoredFiles + ".");
             string text = File.ReadAllText(loginFile, Encoding.UTF8);
             string cleaned = RestoreBuiltInServers(RemovePreset(text));
@@ -893,8 +972,9 @@ namespace SCCommunitySetup
                 string gameRoot = FindGameRoot(executable) ?? SetupForm.FindGamePath();
                 if (LauncherSettings.GetBoolean("SuppressLocalServer", true))
                     localServerGuard = LocalServerGuard.Disable(gameRoot);
-                EnsurePreset(gameRoot);
-                ModUpdater.ApplyConfigured(gameRoot);
+                // Mods first: loginwnd.lua is one of them, the preset then sets the configured address in it.
+                try { ModUpdater.ApplyConfigured(gameRoot); }
+                finally { EnsurePreset(gameRoot); PvpFlags.Ensure(gameRoot); }
 
                 ProcessStartInfo start = new ProcessStartInfo();
                 start.FileName = executable;
@@ -1020,7 +1100,7 @@ namespace SCCommunitySetup
             return result.ToString();
         }
 
-        private static void WriteLauncherLog(string message)
+        internal static void WriteLauncherLog(string message)
         {
             try
             {
@@ -1064,6 +1144,8 @@ namespace SCCommunitySetup
             string value = Get(key);
             if (String.IsNullOrWhiteSpace(value)) return fallback;
             bool parsed;
+            if (value.Trim() == "1") return true;
+            if (value.Trim() == "0") return false;
             return Boolean.TryParse(value, out parsed) ? parsed : fallback;
         }
 
@@ -1386,7 +1468,7 @@ namespace SCCommunitySetup
             HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
             request.Timeout = 5000;
             request.ReadWriteTimeout = 5000;
-            request.UserAgent = "SC-Launcher/0.7.2";
+            request.UserAgent = "SC-Launcher/" + LauncherSelfUpdate.Current.ToString(3);
             using (WebResponse response = request.GetResponse())
             using (Stream input = response.GetResponseStream())
             using (MemoryStream output = new MemoryStream())
@@ -1409,14 +1491,172 @@ namespace SCCommunitySetup
         }
     }
 
+    // SC-84: "wait longer for live players in PvP". The checkbox adds sc_long_wait = 1 to the PvP request in the
+    // client's gameplaywnd.lua (UI.GameplayWnd:PrepareAndStartArcade); Shard passes it on in enqParams, and the
+    // server's MatchMaker gives such a player extra time before bots fill the game (mm_scLongWaitExtra).
+    // SC-177: "ready to play solo against squads". The second checkbox adds sc_solo_vs_squads = 1 to the same request;
+    // the MatchMaker lets such a single join a squad's game against bots in team 2 instead of a solo game with bots.
+    // The file is not a mod file: the change is reversible text, removed on "Remove modification".
+    internal static class PvpFlags
+    {
+        internal const string LongWaitKey = "LongPvpWait";
+        internal const string SoloVsSquadsKey = "SoloVsSquads";
+        private const string RelativePath = @"data\ui\scripts\windows\gameplaywnd.lua";
+        private const string Prefix = "mmParams = { arcade = 1, ";
+        private const string LongWait = "sc_long_wait = 1, ";
+        private const string SoloVsSquads = "sc_solo_vs_squads = 1, ";
+        private const string Suffix = "region";
+
+        internal static bool LongWaitEnabled { get { return LauncherSettings.GetBoolean(LongWaitKey, false); } }
+        internal static bool SoloVsSquadsEnabled { get { return LauncherSettings.GetBoolean(SoloVsSquadsKey, false); } }
+
+        internal static bool Ensure(string gameRoot) { return Ensure(gameRoot, LongWaitEnabled, SoloVsSquadsEnabled); }
+
+        // Returns false when the client file has an unknown structure (nothing is changed then).
+        internal static bool Ensure(string gameRoot, bool longWait, bool soloVsSquads)
+        {
+            string file = Path.Combine(gameRoot, RelativePath);
+            if (!File.Exists(file)) return false;
+            byte[] bytes = File.ReadAllBytes(file);
+            bool bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+            string text = new UTF8Encoding(false).GetString(bytes, bom ? 3 : 0, bytes.Length - (bom ? 3 : 0));
+            // any earlier state (stock, either flag, both) back to stock, then the wanted flags
+            Regex any = new Regex(Regex.Escape(Prefix) + "(" + Regex.Escape(LongWait) + ")?(" + Regex.Escape(SoloVsSquads) + ")?" + Regex.Escape(Suffix));
+            if (!any.IsMatch(text)) return false;
+            string wanted = Prefix + (longWait ? LongWait : "") + (soloVsSquads ? SoloVsSquads : "") + Suffix;
+            string desired = any.Replace(text, wanted);
+            if (desired == text) return true;
+            File.WriteAllText(file, desired, new UTF8Encoding(bom));
+            return true;
+        }
+    }
+
+    internal sealed class LauncherRelease
+    {
+        internal Version Version;
+        internal string Sha256;
+        internal Uri Url;
+    }
+
+    // SC-190: the launcher updates itself. The mod manifest carries one comment line
+    //   #LAUNCHER<TAB><version><TAB><SHA-256><TAB><https url of SC-Launcher.exe>
+    // (launchers up to 0.7.4 skip '#' lines, so the line does not break them). A newer version is offered
+    // in the launcher window only (never in the Steam launch mode): download to a temp file, check the
+    // SHA-256, rename the running exe to <name>.old.exe (Windows allows renaming a running exe), put the
+    // new one in its place and restart; the next start deletes the .old.exe.
+    internal static class LauncherSelfUpdate
+    {
+        internal static Version Current
+        {
+            get { return Normalize(Assembly.GetExecutingAssembly().GetName().Version); }
+        }
+
+        internal static string ExePath { get { return Path.GetFullPath(Application.ExecutablePath); } }
+
+        private static string OldPath
+        {
+            get { return Path.Combine(Path.GetDirectoryName(ExePath), Path.GetFileNameWithoutExtension(ExePath) + ".old.exe"); }
+        }
+
+        // Right after an update the previous process may still be closing and hold its exe, so retry for a while.
+        internal static void CleanupOld()
+        {
+            string old = OldPath;
+            if (!File.Exists(old)) return;
+            Task.Run(() => {
+                for (int attempt = 0; attempt < 30 && File.Exists(old); attempt++)
+                {
+                    try { File.Delete(old); }
+                    catch { System.Threading.Thread.Sleep(500); }
+                }
+            });
+        }
+
+        internal static LauncherRelease FindNewer()
+        {
+            Exception last = null;
+            foreach (string source in ModUpdater.Sources())
+            {
+                Uri uri;
+                if (!Uri.TryCreate(source, UriKind.Absolute, out uri) || uri.Scheme != Uri.UriSchemeHttps) continue;
+                string manifest;
+                try { using (WebClient client = ModUpdater.NewClient()) manifest = client.DownloadString(uri); }
+                catch (WebException ex) { last = ex; continue; }
+                foreach (string raw in manifest.Replace("\r\n", "\n").Split('\n'))
+                {
+                    string[] f = raw.Trim().Split('\t');
+                    if (f.Length != 4 || f[0] != "#LAUNCHER") continue;
+                    Version version;
+                    Uri url;
+                    string hash = f[2].Trim().ToUpperInvariant();
+                    if (!Version.TryParse(f[1].Trim(), out version) || !Regex.IsMatch(hash, "^[0-9A-F]{64}$") ||
+                        !Uri.TryCreate(f[3].Trim(), UriKind.Absolute, out url) || url.Scheme != Uri.UriSchemeHttps)
+                        throw new InvalidDataException("Invalid #LAUNCHER line in the mod manifest");
+                    version = Normalize(version);
+                    return version > Current ? new LauncherRelease { Version = version, Sha256 = hash, Url = url } : null;
+                }
+                return null;   // reachable manifest without a launcher line
+            }
+            if (last != null) throw last;
+            return null;
+        }
+
+        internal static bool CanReplaceSelf()
+        {
+            try
+            {
+                string probe = Path.Combine(Path.GetDirectoryName(ExePath), ".sc-launcher-write-test");
+                File.WriteAllText(probe, "");
+                File.Delete(probe);
+                return true;
+            }
+            catch { return false; }
+        }
+
+        internal static void Install(LauncherRelease release)
+        {
+            string exe = ExePath;
+            string temp = exe + ".download.tmp";
+            if (File.Exists(temp)) File.Delete(temp);
+            using (WebClient client = ModUpdater.NewClient()) client.DownloadFile(release.Url, temp);
+            string actual;
+            using (SHA256 sha = SHA256.Create())
+            using (FileStream stream = File.OpenRead(temp))
+                actual = BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "");
+            if (actual != release.Sha256)
+            {
+                File.Delete(temp);
+                throw new InvalidDataException(UiText.T("контрольная сумма скачанного файла не совпала", "the downloaded file failed the SHA-256 check"));
+            }
+            if (File.Exists(OldPath)) File.Delete(OldPath);
+            File.Move(exe, OldPath);
+            try { File.Move(temp, exe); }
+            catch
+            {
+                File.Move(OldPath, exe);
+                throw;
+            }
+        }
+
+        private static Version Normalize(Version v)
+        {
+            return new Version(v.Major, v.Minor, Math.Max(v.Build, 0), Math.Max(v.Revision, 0));
+        }
+    }
+
     internal static class ModUpdater
     {
+        internal static string[] Sources()
+        {
+            return LauncherSettings.Get("ModManifestUrl").Split(new[] { ' ', '|', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        }
+
         // ModManifestUrl may list several manifests separated by spaces or '|': the main site first, then
         // mirrors. A network failure (e.g. an ISP resetting *.workers.dev) moves on to the next source;
         // files already installed from the previous one pass the hash check and are not downloaded again.
         internal static string ApplyConfigured(string gameRoot)
         {
-            string[] sources = LauncherSettings.Get("ModManifestUrl").Split(new[] { ' ', '|', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] sources = Sources();
             if (sources.Length == 0) return String.Empty;
             Exception last = null;
             foreach (string source in sources)
@@ -1554,11 +1794,11 @@ namespace SCCommunitySetup
 
         private static string AddedListPath() { return Path.Combine(StateRoot(), "mod-added.txt"); }
 
-        private static WebClient NewClient()
+        internal static WebClient NewClient()
         {
             ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
             WebClient client = new WebClient();
-            client.Headers[HttpRequestHeader.UserAgent] = "SC-Launcher/0.7.2";
+            client.Headers[HttpRequestHeader.UserAgent] = "SC-Launcher/" + LauncherSelfUpdate.Current.ToString(3);
             return client;
         }
 
